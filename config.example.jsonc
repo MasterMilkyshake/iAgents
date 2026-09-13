@@ -1,0 +1,47 @@
+// Copy to config.jsonc (which git ignores) and fill in your details.
+{
+  "owner": {
+    // Your own phone number and/or Apple ID email. Only texts from these are passed to the bots.
+    "handles": ["+15551234567"],
+    // Where unprompted messages (reports, routine results) go. Defaults to the first handle.
+    "notify": "+15551234567"
+  },
+
+  // One entry per contact on your phone. "address" is what you text; each must be an address
+  // on the bot Apple ID that Messages on the relay Mac is signed into.
+  // "grokBot" is the bot's name in the Grok Bot app (run `iagents bots` to list them).
+  "bots": [
+    {
+      "name": "Chief",
+      "address": "you.chief.bot@gmail.com",
+      "grokBot": "Chief of Staff"
+    },
+    {
+      // A Grok Bot bot you've set up to run Cursor agents on your repos. Its agent
+      // updates and results come back here like any other message.
+      "name": "Dev",
+      "address": "you.dev.bot@gmail.com",
+      "grokBot": "Dev"
+    }
+    // "relay": "replies" on a bot forwards only answers to your texts, not routine posts.
+  ],
+
+  // Texts that don't match a bot address go here.
+  "defaultBot": "Chief",
+
+  // Optional prompts the relay sends for you. Grok Bot routines work too and don't need this.
+  "schedules": [
+    {
+      "bot": "Chief",
+      "time": "07:30",
+      "days": "weekdays", // "daily", "weekends", or ["mon", "thu"]
+      "prompt": "Morning brief: today's calendar, anything urgent in my inbox, and top news I care about. Keep it short."
+    }
+  ],
+
+  // Unprompted messages that arrive in this window wait until it ends. Replies to your texts always go through.
+  "quietHours": { "start": "22:30", "end": "07:00" },
+
+  // "auto" prefixes "[Name]" only when a message can't come from that bot's own address.
+  "tagReplies": "auto"
+}

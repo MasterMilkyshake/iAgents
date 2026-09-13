@@ -1,0 +1,27 @@
+{
+  "name": "iagents",
+  "version": "0.1.0",
+  "description": "Text your Grok Bot bots and Cursor cloud agents from iMessage.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=23.6"
+  },
+  "bin": {
+    "iagents": "bin/iagents.js"
+  },
+  "scripts": {
+    "start": "node src/cli.ts run",
+    "doctor": "node src/cli.ts doctor",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "grok-bot-cli": "0.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.1",
+    "typescript": "^7.0.2"
+  }
+}
