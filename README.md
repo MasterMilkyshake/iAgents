@@ -51,8 +51,8 @@ To keep the Mac awake, open System Settings → Energy (on a laptop, Battery →
 ### 3. Install iAgents
 
 ```sh
-git clone https://github.com/MasterMilkyshake/iagents.git
-cd iagents
+git clone https://github.com/MasterMilkyshake/iAgents.git
+cd iAgents
 npm install
 npm link            # makes the `iagents` command available
 cp config.example.jsonc config.jsonc
