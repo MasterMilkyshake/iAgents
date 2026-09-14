@@ -153,6 +153,7 @@ export class FakeGrokBot implements GrokBotApi {
   failSends = false;
   #transcripts = new Map<string, Record<string, unknown>[]>();
   #counter = 0;
+  #clock = 1789344000000;
 
   async listBots() {
     return this.bots;
@@ -161,7 +162,13 @@ export class FakeGrokBot implements GrokBotApi {
   async sendPrompt(botId: string, prompt: string, nonce: string) {
     if (this.failSends) throw new Error("gateway unavailable");
     this.prompts.push({ botId, prompt, nonce });
-    this.post(botId, { id: `user-${++this.#counter}`, role: "user", text: prompt });
+    // The shape Grok Bot 0.47 records for your own message.
+    this.post(botId, { kind: "message", id: `t${++this.#counter}u`, role: "user", content: prompt, isStreaming: false, timestampMs: (this.#clock += 1000) });
+  }
+
+  /** A message from the bot, in Grok Bot's real transcript shape (no role; text under message.content). */
+  reply(botId: string, id: string, content: string, extra: Record<string, unknown> = {}): void {
+    this.post(botId, { kind: "send-message", id, message: { type: "text", content }, timestampMs: (this.#clock += 1000), ...extra });
   }
 
   async transcriptTail(botId: string, limit: number) {

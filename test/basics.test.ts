@@ -29,6 +29,14 @@ describe("handles", () => {
     assert.equal(normalizeHandle("+1 (555) 123-0000"), "+15551230000");
   });
 
+  it("keeps plus-addressed emails intact", () => {
+    // Bot addresses are Gmail plus-addresses; the + must survive normalization.
+    assert.equal(normalizeHandle("e:Abhishekpallepati+Chief@gmail.com"), "abhishekpallepati+chief@gmail.com");
+    assert.ok(handlesMatch("abhishekpallepati+chief@gmail.com", "e:AbhishekPallepati+Chief@gmail.com"));
+    assert.ok(!handlesMatch("abhishekpallepati+chief@gmail.com", "abhishekpallepati+secretary@gmail.com"));
+    assert.ok(!handlesMatch("abhishekpallepati+chief@gmail.com", "abhishekpallepati@gmail.com"));
+  });
+
   it("matches numbers with and without country code", () => {
     assert.ok(handlesMatch("+15551230000", "(555) 123-0000"));
     assert.ok(handlesMatch("mailto:me@example.com", "ME@example.com"));

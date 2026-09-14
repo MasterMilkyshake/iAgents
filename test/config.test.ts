@@ -14,7 +14,7 @@ describe("validateConfig", () => {
     assert.equal(config.owner.notify, OWNER);
     assert.equal(config.bots[0].relay, "all");
     assert.equal(config.tagReplies, "auto");
-    assert.equal(config.poll.stableMs, 4000);
+    assert.equal(config.poll.stableMs, 2500);
     assert.match(config.chatDbPath, /Library\/Messages\/chat\.db$/);
   });
 

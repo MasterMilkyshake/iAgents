@@ -101,8 +101,9 @@ export class Relay {
     let rows: MessageRow[];
     try {
       if (this.#lastRowId === undefined) {
-        const saved = Number(this.#state.getKv("chatdb:lastRowId"));
-        this.#lastRowId = Number.isFinite(saved) && saved > 0 ? saved : this.#messages.maxRowId();
+        const value = this.#state.getKv("chatdb:lastRowId");
+        const saved = Number(value);
+        this.#lastRowId = value !== undefined && Number.isSafeInteger(saved) && saved >= 0 ? saved : this.#messages.maxRowId();
         this.#state.setKv("chatdb:lastRowId", String(this.#lastRowId));
       }
       rows = this.#messages.rowsAfter(this.#lastRowId);

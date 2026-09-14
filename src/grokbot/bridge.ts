@@ -87,6 +87,8 @@ type BotState = {
   activeUntil: number;
   polling: boolean;
   baselined: boolean;
+  /** Text already texted per entry id, so a message that grows later can be continued. */
+  relayed: Map<string, string>;
 };
 
 export type GrokBotBridgeDeps = {
@@ -121,6 +123,7 @@ export class GrokBotBridge {
         activeUntil: 0,
         polling: false,
         baselined: false,
+        relayed: new Map(),
       });
     }
   }
@@ -208,10 +211,21 @@ export class GrokBotBridge {
       }
       const entries = await this.#entries(botId);
       const t = now();
-      for (const entry of bot.tracker.ready(entries, t, (id) => state.isSeen(botId, id))) {
-        state.markSeen(botId, [entry.id], t);
+      const fullText = new Map(entries.map((entry) => [entry.id, entry.text]));
+      // Continuations follow the same settling, ordering, and routing rules as new messages.
+      const pending = entries.map((entry) => {
+        const previous = bot.relayed.get(entry.id);
+        if (previous === undefined) return entry;
+        return { ...entry, text: entry.text.startsWith(previous) ? entry.text.slice(previous.length).trim() : "" };
+      });
+      for (const entry of bot.tracker.ready(pending, t, (id) => state.isSeen(botId, id) && !bot.relayed.has(id))) {
         const active = t < bot.activeUntil;
-        if (bot.contact.relay === "replies" && !active) continue;
+        if (bot.contact.relay === "replies" && !active) {
+          state.markSeen(botId, [entry.id], t);
+          // Once a conversation becomes inactive, stop following its old continuations too.
+          bot.relayed.delete(entry.id);
+          continue;
+        }
         if (active) bot.activeUntil = t + config.poll.activeWindowMs;
 
         let text = bot.isGroup && entry.author ? `${entry.author}: ${entry.text}` : entry.text;
@@ -225,6 +239,10 @@ export class GrokBotBridge {
           text,
           proactive: !active,
         });
+        // enqueue persists synchronously; don't mark an entry seen before it's queued.
+        state.markSeen(botId, [entry.id], t);
+        bot.relayed.set(entry.id, fullText.get(entry.id)!);
+        if (bot.relayed.size > config.poll.transcriptLimit) bot.relayed.delete(bot.relayed.keys().next().value!);
       }
     } catch (err) {
       log.warn(`Couldn't read ${bot.contact.name}'s Grok Bot transcript`, err);

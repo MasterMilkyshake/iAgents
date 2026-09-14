@@ -16,6 +16,9 @@ export type OutgoingMessage = {
   proactive: boolean;
 };
 
+type QueuedMessage = OutgoingMessage & { remainingChunks?: string[] };
+const RETRY_MS = 30_000;
+
 export type OutboxDeps = {
   sender: Sender;
   chats: { oneToOneChats(handle: string): ChatInfo[] };
@@ -35,15 +38,34 @@ export type OutboxDeps = {
 export class Outbox {
   #deps: OutboxDeps;
   #chain: Promise<void> = Promise.resolve();
+  #queued = new Set<number>();
+  #retryAt = new Map<number, number>();
 
   constructor(deps: OutboxDeps) {
     this.#deps = deps;
   }
 
   enqueue(message: OutgoingMessage): Promise<void> {
+    // Persist before scheduling asynchronous work, including ordinary replies.
+    const id = this.#deps.state.deferMessage(message, this.#deps.now().getTime());
+    return this.#queue(id, { ...message });
+  }
+
+  #queue(id: number, message: QueuedMessage): Promise<void> {
+    if (this.#queued.has(id)) return this.#chain;
+    this.#queued.add(id);
     this.#chain = this.#chain
-      .then(() => this.#deliver(message))
-      .catch((err) => log.error(`Failed to send ${message.botName} message`, err));
+      .then(async () => {
+        if (await this.#deliver(id, message)) {
+          this.#deps.state.removeDeferred(id);
+          this.#retryAt.delete(id);
+        }
+      })
+      .catch((err) => {
+        this.#retryAt.set(id, this.#deps.now().getTime() + RETRY_MS);
+        log.error(`Failed to send ${message.botName} message (queued for retry)`, err);
+      })
+      .finally(() => this.#queued.delete(id));
     return this.#chain;
   }
 
@@ -51,22 +73,24 @@ export class Outbox {
     return this.#chain;
   }
 
-  /** Sends anything held during quiet hours once they're over. */
+  /** Resumes persisted messages after quiet hours, a failed send, or a restart. */
   flushDeferred(): Promise<void> {
     const { state, config, now } = this.#deps;
-    if (isQuietTime(config.quietHours, now())) return this.#chain;
-    for (const payload of state.takeDeferred()) {
-      this.enqueue({ ...(payload as OutgoingMessage), proactive: false });
+    const t = now();
+    for (const { id, payload } of state.deferredMessages()) {
+      const message = payload as QueuedMessage;
+      if (t.getTime() < (this.#retryAt.get(id) ?? 0)) continue;
+      if (message.proactive && isQuietTime(config.quietHours, t)) continue;
+      this.#queue(id, message);
     }
     return this.#chain;
   }
 
-  async #deliver(message: OutgoingMessage): Promise<void> {
+  async #deliver(id: number, message: QueuedMessage): Promise<boolean> {
     const { sender, chats, state, config, now } = this.#deps;
     if (message.proactive && isQuietTime(config.quietHours, now())) {
-      state.deferMessage(message, now().getTime());
       log.info(`Holding a ${message.botName} message until quiet hours end`);
-      return;
+      return false;
     }
 
     let known: ChatInfo[] = [];
@@ -80,10 +104,15 @@ export class Outbox {
     const tag = config.tagReplies === "always" || (config.tagReplies === "auto" && config.bots.length > 1 && !own);
 
     const body = markdownToText(message.text);
-    if (!body) return;
-    for (const chunk of chunkText(tag ? `[${message.botName}] ${body}` : body, config.maxMessageLength)) {
+    if (!body) return true;
+    message.remainingChunks ??= chunkText(tag ? `[${message.botName}] ${body}` : body, config.maxMessageLength);
+    while (message.remainingChunks.length) {
+      const chunk = message.remainingChunks[0];
       await sender.send({ handle: message.to, chatGuid: chat?.guid }, chunk);
       state.addPendingSent(message.to, chunk, message.botName, now().getTime());
+      message.remainingChunks.shift();
+      state.updateDeferred(id, message);
     }
+    return true;
   }
 }

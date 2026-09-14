@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
-import { PROJECT_ROOT } from "./config.ts";
+import { DEFAULT_CONFIG_PATH, loadConfig, PROJECT_ROOT } from "./config.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -15,7 +15,7 @@ function xml(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-export function renderPlist(node: string, cli: string, cwd: string, logPath: string): string {
+export function renderPlist(node: string, cli: string, cwd: string, logPath: string, configPath = DEFAULT_CONFIG_PATH): string {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -42,6 +42,8 @@ export function renderPlist(node: string, cli: string, cwd: string, logPath: str
   <dict>
     <key>PATH</key>
     <string>/usr/bin:/bin:/usr/sbin:/sbin:${xml(dirname(node))}</string>
+    <key>IAGENTS_CONFIG</key>
+    <string>${xml(configPath)}</string>
   </dict>
   <key>StandardOutPath</key>
   <string>${xml(logPath)}</string>
@@ -57,9 +59,11 @@ function domain(): string {
 }
 
 export async function installService(): Promise<void> {
+  const configPath = resolve(process.env.IAGENTS_CONFIG || DEFAULT_CONFIG_PATH);
+  loadConfig(configPath); // Fail before replacing a working service with an invalid config.
   mkdirSync(dirname(PLIST_PATH), { recursive: true });
   mkdirSync(dirname(LOG_PATH), { recursive: true });
-  writeFileSync(PLIST_PATH, renderPlist(process.execPath, join(PROJECT_ROOT, "src", "cli.ts"), PROJECT_ROOT, LOG_PATH));
+  writeFileSync(PLIST_PATH, renderPlist(process.execPath, join(PROJECT_ROOT, "src", "cli.ts"), PROJECT_ROOT, LOG_PATH, configPath));
   await execFileAsync("launchctl", ["bootout", `${domain()}/${LABEL}`]).catch(() => {});
   await execFileAsync("launchctl", ["bootstrap", domain(), PLIST_PATH]);
 }

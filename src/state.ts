@@ -97,15 +97,22 @@ export class State {
     return row?.bot_name;
   }
 
-  deferMessage(payload: unknown, now: number): void {
-    this.db.prepare("INSERT INTO deferred (payload, created_at) VALUES (?, ?)").run(JSON.stringify(payload), now);
+  deferMessage(payload: unknown, now: number): number {
+    return Number(this.db.prepare("INSERT INTO deferred (payload, created_at) VALUES (?, ?)").run(JSON.stringify(payload), now).lastInsertRowid);
   }
 
-  /** Removes and returns every deferred message, oldest first. */
-  takeDeferred(): unknown[] {
+  /** Reads queued messages without deleting them; acknowledge only after delivery. */
+  deferredMessages(): { id: number; payload: unknown }[] {
     const rows = this.db.prepare("SELECT id, payload FROM deferred ORDER BY id").all() as { id: number; payload: string }[];
-    if (rows.length > 0) this.db.prepare("DELETE FROM deferred WHERE id <= ?").run(rows[rows.length - 1].id);
-    return rows.map((r) => JSON.parse(r.payload));
+    return rows.map((r) => ({ id: r.id, payload: JSON.parse(r.payload) }));
+  }
+
+  updateDeferred(id: number, payload: unknown): void {
+    this.db.prepare("UPDATE deferred SET payload = ? WHERE id = ?").run(JSON.stringify(payload), id);
+  }
+
+  removeDeferred(id: number): void {
+    this.db.prepare("DELETE FROM deferred WHERE id = ?").run(id);
   }
 
   hasScheduleRun(name: string, day: string): boolean {

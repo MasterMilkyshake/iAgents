@@ -170,7 +170,7 @@ export function validateConfig(raw: unknown): Config {
       grokBotActiveMs: num(poll, "grokBotActiveMs", 3000, 1000),
       grokBotIdleMs: num(poll, "grokBotIdleMs", 45_000, 5000),
       activeWindowMs: num(poll, "activeWindowMs", 15 * 60_000, 60_000),
-      stableMs: num(poll, "stableMs", 4000, 0),
+      stableMs: num(poll, "stableMs", 2500, 0),
       transcriptLimit: num(poll, "transcriptLimit", 50, 5),
     },
   };

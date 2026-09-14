@@ -106,6 +106,72 @@ describe("TranscriptTracker", () => {
     const user: TranscriptEntry = { id: "u", role: "user", text: "hi", complete: true, author: "", needsApproval: false };
     assert.deepEqual(tracker.ready([bot("a", "old", true), user, bot("b", "new", true)], 0, (id) => id === "a").map((e) => e.id), ["b"]);
   });
+
+  it("stops fast polling when a pending entry leaves the transcript tail", () => {
+    const tracker = new TranscriptTracker(2000);
+    tracker.ready([bot("a", "writing", false)], 0, never);
+    assert.ok(tracker.hasPending());
+    tracker.ready([bot("b", "finished", true)], 1000, never);
+    assert.ok(!tracker.hasPending());
+  });
+
+  it("forgets pending entries that become seen", () => {
+    const tracker = new TranscriptTracker(2000);
+    tracker.ready([bot("a", "writing", false)], 0, never);
+    tracker.ready([bot("a", "writing", false)], 1000, () => true);
+    assert.ok(!tracker.hasPending());
+  });
+});
+
+describe("Grok Bot 0.47 transcript shape", () => {
+  // Captured from a live `iagents probe`: bot messages have no role, and their text is
+  // nested under message.content. Getting this wrong meant replies were silently dropped.
+  const payload = {
+    entries: [
+      {
+        kind: "message",
+        id: "t106u",
+        role: "user",
+        content: "Reply with one line so I can confirm the bridge works.",
+        richText: '{"type":"doc","content":[]}',
+        isStreaming: false,
+        timestampMs: 1789344111368,
+        clientNonce: "02c772c7-5cf6-57f1-9cda-d14a86114f90",
+      },
+      {
+        kind: "send-message",
+        id: "t106s0",
+        message: { type: "text", content: "Hello — bridge confirmed." },
+        timestampMs: 1789344114084,
+        requestId: "07790584-64fa-452c-aca0-7c4678ebfec3",
+      },
+    ],
+    nextBeforeSeq: 427,
+  };
+
+  it("reads your message and the bot's reply", () => {
+    const entries = extractEntries(payload).map((e) => parseEntry(e)!);
+    assert.deepEqual(
+      entries.map((e) => ({ id: e.id, role: e.role, text: e.text, at: e.at })),
+      [
+        { id: "t106u", role: "user", text: "Reply with one line so I can confirm the bridge works.", at: 1789344111368 },
+        { id: "t106s0", role: "bot", text: "Hello — bridge confirmed.", at: 1789344114084 },
+      ],
+    );
+  });
+
+  it("relays the bot's reply once its text settles", () => {
+    const entries = extractEntries(payload).map((e) => parseEntry(e)!);
+    const tracker = new TranscriptTracker(4000);
+    assert.equal(tracker.ready(entries, 0, () => false).length, 0, "not yet settled");
+    assert.deepEqual(tracker.ready(entries, 5000, () => false).map((e) => e.text), ["Hello — bridge confirmed."]);
+  });
+
+  it("ignores a non-text payload such as an image", () => {
+    const entry = parseEntry({ kind: "send-message", id: "s1", message: { type: "image", url: "https://example.com/a.png" }, timestampMs: 1 });
+    assert.equal(entry?.role, "bot");
+    assert.equal(entry?.text, "");
+  });
 });
 
 describe("chronological", () => {

@@ -18,7 +18,7 @@ iPhone ──iMessage──▶ Mac signed into a "bot" Apple ID
 
 - A Mac that stays on and logged in, with Node.js 23.6+ (`brew install node`) and the Grok Bot app signed in.
 - A second Apple ID just for the bots. Messages can't send as several people, so the bots share this account and each bot gets its own address on it.
-- One email address per bot, added to that Apple ID. Anything you can receive a verification code at works, such as extra Gmail addresses.
+- One email address per bot, added to that Apple ID and enabled in Messages. Receiving Apple's verification email is the first step; confirm that each address appears in Messages and receives an iMessage before relying on it.
 
 ## Setup
 
@@ -29,10 +29,17 @@ iPhone ──iMessage──▶ Mac signed into a "bot" Apple ID
 
 ### 2. Sign Messages into the bot account
 
-Messages, the Grok Bot app, and iAgents all have to run in the **same macOS user account**. Pick one:
+**A second macOS user is optional.** Messages, the Grok Bot app, and iAgents all have to run in the **same macOS user account**. Pick the setup that fits how you use this Mac:
 
-- **Dedicated Mac, or you don't use iMessage on this Mac:** in Messages → Settings → iMessage, sign out of your personal Apple ID and sign in with the bot Apple ID. Your own texts stay on your iPhone.
-- **Keep your personal Messages on this Mac:** create a second macOS user (System Settings → Users & Groups), log into it, and do everything below there. Switch back to your own user with fast user switching; the bot user stays logged in and keeps running.
+| What you want | Setup | Tradeoff |
+| --- | --- | --- |
+| No extra macOS user | In Messages → Settings → iMessage, sign out and sign in with the bot Apple Account. | Your current Mac session stops receiving personal iMessages; your iPhone keeps them. This changes the Messages login, not your Mac's iCloud login. |
+| Personal and bot Messages running on this Mac together | Create a standard macOS user for the relay in System Settings → Users & Groups. | One additional logged-in session. Recommended if you use personal Messages on this Mac. |
+| Keep the relay off your everyday Mac | Use another always-on Mac signed into the bot account. | Requires another machine. |
+
+Messages exposes one signed-in iMessage account per macOS user session. Duplicating Messages.app or running another relay process doesn't create another messaging identity. See Apple's [iMessage account settings](https://support.apple.com/guide/messages/icht39422/mac).
+
+For the separate-user setup, log into that user's desktop and install/configure iAgents there, with Grok Bot signed in there too. Use a checkout in that user's home folder, rather than pointing at your personal user's Messages database or Keychain. You don't need a separate Grok subscription: sign into your existing Grok account. Switching back with [fast user switching](https://support.apple.com/guide/mac-help/mchlp2439/mac) leaves the relay user's processes running ([Apple's explanation](https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPMultipleUsers/Concepts/FastUserSwitching.html)). Logging that user out stops the relay. After restarting the Mac, log into the relay user once before switching back.
 
 Then, in Messages → Settings → iMessage:
 
@@ -80,6 +87,7 @@ iagents install                      # runs the relay in the background, startin
 ```
 
 Logs are at `~/Library/Logs/iAgents/relay.log`.
+The installer validates your config before replacing the service. If you use `IAGENTS_CONFIG=/absolute/path/config.jsonc`, it preserves that path for background runs. Complete the permission prompts in the relay user's desktop session before switching away.
 
 ### 6. On your iPhone
 
@@ -104,8 +112,9 @@ On the Mac, Messages merges your conversations with all the bot addresses into o
 ## How it works
 
 - **Incoming:** iAgents polls `~/Library/Messages/chat.db` (read-only) for new texts to the bot addresses and drops anything not from `owner.handles`, as well as tapbacks, group chats, and messages more than 15 minutes old. The address you texted, an `@mention`, or the message you swipe-replied to decides which bot gets it. The prompt is sent through the Grok Bot gateway, using the iMessage ID as an idempotency key so a retry never posts twice.
-- **Outgoing:** each bot's transcript is polled every few seconds after you text it and every 45 seconds otherwise. New bot messages are sent once they stop changing, in order, with Markdown converted to plain text and long replies split into several bubbles. Messages already in a transcript when iAgents first sees a bot are never replayed.
-- **State** (last message seen, which bot sent which bubble, held messages) lives in `~/Library/Application Support/iAgents/state.db`. Message contents aren't written to the logs.
+- **Outgoing:** each bot's transcript is polled every few seconds after you text it and every 45 seconds otherwise. New bot messages are sent once they stop changing, in order, with Markdown converted to plain text and long replies split into several bubbles. During a run, if an already-relayed message grows, its new text goes through the same settling and routing rules. Messages already in a transcript when iAgents first sees a bot are never replayed.
+- **Delivery:** outgoing messages are saved before sending. Failed sends retry after 30 seconds, and queued messages survive restarts. Each successful bubble is acknowledged separately so retries resume a partially sent long reply. Messages.app doesn't provide an idempotency key: a timeout or crash after it accepts a bubble but before the relay records success can still cause a duplicate. Quiet hours hold proactive messages while allowing direct replies through.
+- **State** (last message seen, which bot sent which bubble, queued message contents) lives in `~/Library/Application Support/iAgents/state.db`. Message contents aren't written to the logs.
 
 ## Troubleshooting
 

@@ -1,10 +1,19 @@
 import { createHash } from "node:crypto";
 
 /**
- * Grok Bot's gateway API is undocumented, so transcript entries are read defensively:
- * several plausible field names are accepted, and anything that isn't clearly a message
- * from the bot (tool calls, thinking, status updates, your own messages) is ignored.
- * Run `iagents probe <bot>` to see the raw shape if relaying ever misbehaves.
+ * Grok Bot's gateway API is undocumented. As of Grok Bot 0.47 a transcript looks like:
+ *
+ *   { "entries": [
+ *       { "kind": "message",      "id": "t1u",  "role": "user", "content": "…",
+ *         "isStreaming": false, "timestampMs": 1789344111368 },
+ *       { "kind": "send-message", "id": "t1s0", "message": { "type": "text", "content": "…" },
+ *         "timestampMs": 1789344114084 }
+ *     ] }
+ *
+ * Bot messages carry no role: the kind is what marks them. Entries are read defensively so a
+ * format change degrades to "don't relay" rather than relaying junk; anything not recognizable
+ * as a message from the bot (tool calls, thinking, status, your own messages) is ignored.
+ * Run `iagents probe <bot>` to see the current raw shape.
  */
 
 export type EntryRole = "user" | "bot" | "other";
@@ -25,6 +34,8 @@ type Obj = Record<string, unknown>;
 
 const USER_ROLES = new Set(["user", "human", "owner", "me", "client"]);
 const BOT_ROLES = new Set(["assistant", "agent", "bot", "ai", "model"]);
+/** Entry kinds that mean "the bot said this", which carry no role of their own. */
+const BOT_KINDS = new Set(["send-message", "send_message", "sendmessage", "assistant-message", "agent-message", "bot-message"]);
 const NON_MESSAGE_TYPE = /tool|function|thinking|reasoning|status|progress|event|system|log|trace|debug|typing/;
 const MESSAGE_TYPE = /message|reply|response|text|answer/;
 const IN_PROGRESS = new Set(["streaming", "pending", "in_progress", "inprogress", "running", "generating", "partial", "queued", "working"]);
@@ -62,7 +73,7 @@ export function parseEntry(raw: unknown): TranscriptEntry | undefined {
   const text = entryText(e).trim();
   const id = str(e.id) || str(e.messageId) || str(e.entryId) || str(e.uuid) || str(e.key) || syntheticId(e, role, text);
   const kind = `${lower(e.type)} ${lower(e.kind)}`;
-  const at = timestamp(e.createdAt ?? e.created_at ?? e.timestamp ?? e.time ?? e.sentAt);
+  const at = timestamp(e.timestampMs ?? e.timestamp_ms ?? e.createdAt ?? e.created_at ?? e.timestamp ?? e.time ?? e.sentAt);
   return {
     id,
     role,
@@ -104,6 +115,7 @@ function classifyRole(e: Obj): EntryRole {
     lower(e.sender) ||
     lower(e.author);
   if (USER_ROLES.has(role)) return "user";
+  if (BOT_KINDS.has(lower(e.kind)) || BOT_KINDS.has(lower(e.type))) return "bot";
   if (NON_MESSAGE_TYPE.test(kind) && !MESSAGE_TYPE.test(kind)) return "other";
   if (BOT_ROLES.has(role)) return "bot";
   // Some transcripts only encode the speaker in the type, e.g. "user_message" / "assistant_message".
@@ -114,15 +126,23 @@ function classifyRole(e: Obj): EntryRole {
 
 function entryText(e: Obj): string {
   for (const key of ["text", "message", "body", "markdown", "content", "preview"]) {
-    const value = e[key];
-    if (typeof value === "string" && value.trim()) return value;
-    if (Array.isArray(value)) {
-      const joined = value.map(partText).filter(Boolean).join("\n");
-      if (joined.trim()) return joined;
-    }
-    const nested = asObj(value);
-    if (nested && typeof nested.text === "string" && nested.text.trim()) return nested.text;
+    const value = valueText(e[key]);
+    if (value.trim()) return value;
   }
+  return "";
+}
+
+/** Text out of a string, a list of parts, or a wrapper like { type: "text", content: "…" }. */
+function valueText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(partText).filter(Boolean).join("\n");
+  const obj = asObj(value);
+  if (!obj) return "";
+  const type = lower(obj.type);
+  if (type && !/text|markdown|output/.test(type)) return ""; // image, file, card, tool call, …
+  if (typeof obj.text === "string" && obj.text.trim()) return obj.text;
+  if (typeof obj.content === "string") return obj.content;
+  if (Array.isArray(obj.content)) return obj.content.map(partText).filter(Boolean).join("\n");
   return "";
 }
 
@@ -166,9 +186,15 @@ export class TranscriptTracker {
 
   ready(entries: TranscriptEntry[], now: number, isSeen: (id: string) => boolean): TranscriptEntry[] {
     const out: TranscriptEntry[] = [];
+    // Entries can fall out of the transcript tail or become ineligible between polls.
+    // Forget them so stale state doesn't keep an idle bot on the fast polling interval.
+    const eligible = new Set(entries.filter((entry) => entry.role === "bot" && entry.text && !isSeen(entry.id)).map((entry) => entry.id));
+    for (const id of this.#pending.keys()) {
+      if (!eligible.has(id)) this.#pending.delete(id);
+    }
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i];
-      if (entry.role !== "bot" || !entry.text || isSeen(entry.id)) continue;
+      if (!eligible.has(entry.id)) continue;
 
       const prev = this.#pending.get(entry.id);
       const firstSeen = prev?.firstSeen ?? now;
