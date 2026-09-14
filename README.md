@@ -51,8 +51,8 @@ To keep the Mac awake, open System Settings → Energy (on a laptop, Battery →
 ### 3. Install iAgents
 
 ```sh
-git clone https://github.com/MasterMilkyshake/iAgents.git
-cd iAgents
+git clone https://github.com/MasterMilkyshake/iagents.git
+cd iagents
 npm install
 npm link            # makes the `iagents` command available
 cp config.example.jsonc config.jsonc
@@ -60,11 +60,13 @@ cp config.example.jsonc config.jsonc
 
 Open the Grok Bot app, sign in, and create the bots you want to text. For repo work, set up a bot (say, **Dev**) in Grok Bot with access to your Cursor and GitHub accounts, so it can start Cursor agents and report on them. iAgents only relays that conversation.
 
-List the bot names:
+List your bots and their ids:
 
 ```sh
 iagents bots
 ```
+
+Put the **id** in `config.jsonc` rather than the name — ids survive renaming a bot in the app.
 
 When you run this, macOS asks whether `security` may use **"Grok Bot Safe Storage"**. Choose **Always Allow**, or the background service can't run unattended.
 
@@ -105,14 +107,24 @@ Save each bot address as a contact named after the bot. Text it.
 
 Only text is forwarded. Photos and other attachments get a short "text only" reply. Group chats are ignored.
 
+### Letting one bot speak for another
+
+Set `"deliverVia": "Secretary"` on a bot and everything it says **on its own** — reports, routine
+results, finished agent runs — arrives in Secretary's thread labelled `[Manager]`, instead of
+turning up wherever you last texted. Replies to your own texts are untouched: they come back in the
+thread you texted. Swipe-replying to a `[Manager]` message still reaches Manager.
+
+This is worth doing when one bot is your point of contact and the others report through it.
+
 ### Why a message sometimes starts with `[Name]`
 
 On the Mac, Messages merges your conversations with all the bot addresses into one chat, and it sends from whichever address you texted last. If Chief replies right after you texted Dev, the reply arrives from Dev's address, so iAgents labels it `[Chief]`. Swipe-replying to it still reaches Chief. Set `"tagReplies": "always"` or `"never"` to change this.
 
 ## How it works
 
-- **Incoming:** iAgents polls `~/Library/Messages/chat.db` (read-only) for new texts to the bot addresses and drops anything not from `owner.handles`, as well as tapbacks, group chats, and messages more than 15 minutes old. The address you texted, an `@mention`, or the message you swipe-replied to decides which bot gets it. The prompt is sent through the Grok Bot gateway, using the iMessage ID as an idempotency key so a retry never posts twice.
-- **Outgoing:** each bot's transcript is polled every few seconds after you text it and every 45 seconds otherwise. New bot messages are sent once they stop changing, in order, with Markdown converted to plain text and long replies split into several bubbles. During a run, if an already-relayed message grows, its new text goes through the same settling and routing rules. Messages already in a transcript when iAgents first sees a bot are never replayed.
+- **Incoming:** iAgents watches `~/Library/Messages/chat.db` (read-only) and reads new texts the moment Messages writes them, with a 500 ms poll as a safety net. It drops anything not from `owner.handles`, as well as tapbacks, group chats, and messages more than 15 minutes old. The address you texted, an `@mention`, or the message you swipe-replied to decides which bot gets it. The prompt is sent through the Grok Bot gateway, using the iMessage ID as an idempotency key so a retry never posts twice.
+- **Outgoing:** each bot's transcript is polled every 2 seconds after you text it and every 15 seconds otherwise, with an earlier check after a new prompt or when text reaches its 2.5-second settling deadline. Ordinary bot messages (`send-message` entries) are written in one go and go out on the first read; only entries that can stream — `message` entries carrying `isStreaming` — wait to settle. Replies are sent in order, with Markdown converted to plain text and long replies split into several bubbles. During a run, if an already-relayed message grows, its new text goes through the same settling and routing rules. Messages already in a transcript when iAgents first sees a bot are never replayed.
+- **Responsiveness:** incoming-message checks continue while the gateway connects, a transcript request stalls, or Messages.app is sending. Each bot has at most one transcript poll in flight; a slow bot doesn't hold up other bots. Repeated transcript failures back off up to 60 seconds between attempts. These are relay polling intervals, not guarantees of end-to-end delivery time. Override them through `poll.chatDbMs`, `poll.grokBotActiveMs`, `poll.grokBotIdleMs`, and `poll.stableMs` if needed.
 - **Delivery:** outgoing messages are saved before sending. Failed sends retry after 30 seconds, and queued messages survive restarts. Each successful bubble is acknowledged separately so retries resume a partially sent long reply. Messages.app doesn't provide an idempotency key: a timeout or crash after it accepts a bubble but before the relay records success can still cause a duplicate. Quiet hours hold proactive messages while allowing direct replies through.
 - **State** (last message seen, which bot sent which bubble, queued message contents) lives in `~/Library/Application Support/iAgents/state.db`. Message contents aren't written to the logs.
 

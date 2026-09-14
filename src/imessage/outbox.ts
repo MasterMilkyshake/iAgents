@@ -14,6 +14,8 @@ export type OutgoingMessage = {
   text: string;
   /** Not a reply to something you just sent (reports, agent results). Held during quiet hours. */
   proactive: boolean;
+  /** Deliver in another bot's thread (see bots[].deliverVia). Always labelled with botName. */
+  viaAddress?: string;
 };
 
 type QueuedMessage = OutgoingMessage & { remainingChunks?: string[] };
@@ -88,6 +90,10 @@ export class Outbox {
 
   async #deliver(id: number, message: QueuedMessage): Promise<boolean> {
     const { sender, chats, state, config, now } = this.#deps;
+    if (typeof message.to !== "string" || !config.owner.handles.some((handle) => handlesMatch(handle, message.to))) {
+      log.warn("Dropping an outgoing message addressed outside owner.handles");
+      return true;
+    }
     if (message.proactive && isQuietTime(config.quietHours, now())) {
       log.info(`Holding a ${message.botName} message until quiet hours end`);
       return false;
@@ -99,17 +105,27 @@ export class Outbox {
     } catch (err) {
       log.warn("Couldn't look up existing chats; sending by handle", err);
     }
-    const own = known.find((chat) => handlesMatch(chat.lastAddressedHandle, message.botAddress));
+    const speakingAddress = message.viaAddress ?? message.botAddress;
+    const own = known.find((chat) => handlesMatch(chat.lastAddressedHandle, speakingAddress));
     const chat = own ?? (known.length === 1 ? known[0] : undefined);
-    const tag = config.tagReplies === "always" || (config.tagReplies === "auto" && config.bots.length > 1 && !own);
+    // A message delivered in someone else's thread is always labelled, or you can't tell who's talking.
+    const tag =
+      config.tagReplies === "always" ||
+      (config.tagReplies !== "never" && message.viaAddress !== undefined) ||
+      (config.tagReplies === "auto" && config.bots.length > 1 && !own);
 
     const body = markdownToText(message.text);
     if (!body) return true;
     message.remainingChunks ??= chunkText(tag ? `[${message.botName}] ${body}` : body, config.maxMessageLength);
     while (message.remainingChunks.length) {
       const chunk = message.remainingChunks[0];
-      await sender.send({ handle: message.to, chatGuid: chat?.guid }, chunk);
-      state.addPendingSent(message.to, chunk, message.botName, now().getTime());
+      const pending = state.addPendingSent(message.to, chunk, message.botName, now().getTime());
+      try {
+        await sender.send({ handle: message.to, chatGuid: chat?.guid }, chunk);
+      } catch (err) {
+        state.removePendingSent(pending);
+        throw err;
+      }
       message.remainingChunks.shift();
       state.updateDeferred(id, message);
     }

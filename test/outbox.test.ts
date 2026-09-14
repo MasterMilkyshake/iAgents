@@ -52,6 +52,8 @@ describe("persistent outbox", () => {
     };
     await h.outbox.enqueue(message);
     assert.equal(h.state.deferredMessages().length, 1);
+    assert.equal(h.state.takePendingSent(OWNER, message.text, h.clock.time), undefined,
+      "failed attempts must not claim a later message with the same text");
     await h.outbox.flushDeferred();
     assert.equal(attempts, 1);
     h.clock.advance(30_000);
@@ -92,4 +94,15 @@ describe("persistent outbox", () => {
     assert.deepEqual(h.sender.sent.map((s) => s.text), ["Immediate reply", message.text]);
     assert.equal(h.state.deferredMessages().length, 0);
   });
+});
+
+it("drops persisted recipients outside owner.handles after restart", async () => {
+  const h = harness();
+  h.state.deferMessage({ ...message, to: "+15559999999" }, h.clock.time);
+  h.restart();
+  await h.outbox.flushDeferred();
+  assert.equal(h.sender.sent.length, 0);
+  assert.equal(h.state.deferredMessages().length, 0);
+  await h.outbox.enqueue(message);
+  assert.equal(h.sender.sent.length, 1);
 });

@@ -1,0 +1,143 @@
+{
+  "event:automation-changed": {
+    "kind": "event",
+    "id": "redacted",
+    "event": {
+      "type": "automation-changed",
+      "action": "created",
+      "automationId": "redacted",
+      "automationName": "redacted"
+    },
+    "timestampMs": 1788638220173
+  },
+  "widget:": {
+    "kind": "send-message",
+    "id": "redacted",
+    "message": {
+      "type": "widget",
+      "widget": {
+        "prompt": "redacted",
+        "helpText": "redacted",
+        "options": [
+          {
+            "label": "redacted",
+            "value": "redacted",
+            "description": "redacted"
+          },
+          {
+            "label": "redacted",
+            "value": "redacted",
+            "description": "redacted"
+          },
+          {
+            "label": "redacted",
+            "value": "redacted",
+            "description": "redacted"
+          },
+          {
+            "label": "redacted",
+            "value": "redacted",
+            "description": "redacted"
+          },
+          {
+            "label": "redacted",
+            "value": "redacted",
+            "description": "redacted"
+          }
+        ],
+        "multiSelect": true,
+        "allowCustom": false
+      }
+    },
+    "timestampMs": 1788638286727,
+    "requestId": "redacted",
+    "widgetDismissed": true,
+    "widgetSkipped": true
+  },
+  "event:name-changed": {
+    "kind": "event",
+    "id": "redacted",
+    "event": {
+      "type": "name-changed",
+      "from": "redacted",
+      "to": "redacted"
+    },
+    "timestampMs": 1788639565545
+  },
+  "connector:": {
+    "kind": "send-message",
+    "id": "redacted",
+    "message": {
+      "type": "connector",
+      "connector": "redacted",
+      "serverId": "redacted",
+      "variant": "connect"
+    },
+    "timestampMs": 1788637454287,
+    "requestId": "redacted"
+  },
+  "auto-review-approval:approved": {
+    "kind": "send-message",
+    "id": "redacted",
+    "message": {
+      "type": "auto-review-approval",
+      "approval": {
+        "requestId": "redacted",
+        "surface": "redacted",
+        "summary": "redacted",
+        "summaryCopy": {
+          "kind": "mcp",
+          "params": {
+            "description": "redacted",
+            "serverDisplayName": "redacted"
+          }
+        },
+        "reason": "redacted",
+        "status": "approved",
+        "command": "redacted",
+        "proposedRule": "redacted"
+      }
+    },
+    "timestampMs": 1788654107692,
+    "requestId": "redacted"
+  },
+  "local-tool-permission:allowed": {
+    "kind": "send-message",
+    "id": "redacted",
+    "message": {
+      "type": "local-tool-permission",
+      "ask": {
+        "requestId": "redacted",
+        "action": "run-command",
+        "target": "redacted",
+        "machineId": "redacted",
+        "machineLabel": "redacted",
+        "status": "allowed",
+        "standingGrant": {
+          "kind": "unavailable",
+          "reason": "redacted"
+        }
+      }
+    },
+    "timestampMs": 1789160318572,
+    "requestId": "redacted"
+  },
+  "auto-review-approval:expired": {
+    "kind": "send-message",
+    "id": "redacted",
+    "message": {
+      "type": "auto-review-approval",
+      "approval": {
+        "requestId": "redacted",
+        "surface": "redacted",
+        "summary": "redacted",
+        "reason": "redacted",
+        "status": "expired",
+        "proposedRule": "redacted"
+      }
+    },
+    "timestampMs": 1789351066624,
+    "requestId": "redacted",
+    "wake": "redacted"
+  }
+}

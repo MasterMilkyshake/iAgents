@@ -20,6 +20,12 @@ export type BotContact = {
   grokBot: string;
   /** "all" relays everything the bot posts (routines, reports, agent updates); "replies" only answers to your texts. */
   relay: "all" | "replies";
+  /**
+   * Name of another bot that speaks for this one. Messages this bot sends on its own
+   * (reports, routine results) are delivered in that bot's thread, labelled with this bot's
+   * name. Replies to your own texts still come back where you sent them.
+   */
+  deliverVia?: string;
 };
 
 export type Config = {
@@ -108,6 +114,9 @@ export function validateConfig(raw: unknown): Config {
   }
   const handles = handlesRaw.map((h: string) => h.trim());
   const notify = str(raw.owner, "notify", "owner", false) ?? handles[0];
+  if (!handles.some((handle) => handlesMatch(handle, notify))) {
+    throw new ConfigError("owner.notify must be in owner.handles");
+  }
 
   if (!Array.isArray(raw.bots) || raw.bots.length === 0) throw new ConfigError("bots must list at least one bot");
   const bots = raw.bots.map((bot, i) => validateBot(bot, `bots[${i}]`));
@@ -123,6 +132,15 @@ export function validateConfig(raw: unknown): Config {
   const botAddresses = bots.map((b) => normalizeHandle(b.address));
   if (new Set(botAddresses).size !== botAddresses.length) {
     throw new ConfigError("Each bot needs a different address");
+  }
+
+  for (const bot of bots) {
+    if (bot.deliverVia === undefined) continue;
+    const speaker = bots.find((b) => b.name.toLowerCase() === bot.deliverVia!.toLowerCase());
+    if (!speaker) throw new ConfigError(`bots.${bot.name}.deliverVia "${bot.deliverVia}" isn't in bots`);
+    if (speaker.name === bot.name) throw new ConfigError(`bots.${bot.name}.deliverVia can't be itself`);
+    if (speaker.deliverVia) throw new ConfigError(`bots.${bot.name}.deliverVia points at "${speaker.name}", which also delivers via someone else`);
+    bot.deliverVia = speaker.name;
   }
 
   const defaultBot = typeof raw.defaultBot === "string" ? raw.defaultBot : undefined;
@@ -166,9 +184,9 @@ export function validateConfig(raw: unknown): Config {
     stateDir: expandHome(typeof raw.stateDir === "string" ? raw.stateDir : "~/Library/Application Support/iAgents"),
     logLevel,
     poll: {
-      chatDbMs: num(poll, "chatDbMs", 1500, 250),
-      grokBotActiveMs: num(poll, "grokBotActiveMs", 3000, 1000),
-      grokBotIdleMs: num(poll, "grokBotIdleMs", 45_000, 5000),
+      chatDbMs: num(poll, "chatDbMs", 500, 250),
+      grokBotActiveMs: num(poll, "grokBotActiveMs", 2000, 1000),
+      grokBotIdleMs: num(poll, "grokBotIdleMs", 15_000, 5000),
       activeWindowMs: num(poll, "activeWindowMs", 15 * 60_000, 60_000),
       stableMs: num(poll, "stableMs", 2500, 0),
       transcriptLimit: num(poll, "transcriptLimit", 50, 5),
@@ -187,5 +205,6 @@ function validateBot(raw: unknown, where: string): BotContact {
     address,
     grokBot: str(raw, "grokBot", `bots.${name}`, false) ?? name,
     relay: oneOf(raw.relay, ["all", "replies"] as const, "all", `bots.${name}.relay`),
+    deliverVia: str(raw, "deliverVia", `bots.${name}`, false),
   };
 }

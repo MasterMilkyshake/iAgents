@@ -67,9 +67,13 @@ export class State {
       .run(botId, botId, SEEN_PER_BOT);
   }
 
-  /** Remembers a message we just handed to Messages.app, until its chat.db row shows up. */
-  addPendingSent(handle: string, text: string, botName: string, now: number): void {
-    this.db.prepare("INSERT INTO pending_sent (handle, text, bot_name, created_at) VALUES (?, ?, ?, ?)").run(handle, normalizeText(text), botName, now);
+  /** Registers a send before Messages.app can write its row, so concurrent reads can identify it. */
+  addPendingSent(handle: string, text: string, botName: string, now: number): number {
+    return Number(this.db.prepare("INSERT INTO pending_sent (handle, text, bot_name, created_at) VALUES (?, ?, ?, ?)").run(handle, normalizeText(text), botName, now).lastInsertRowid);
+  }
+
+  removePendingSent(id: number): void {
+    this.db.prepare("DELETE FROM pending_sent WHERE id = ?").run(id);
   }
 
   /** Claims the oldest pending message to `handle` with this text and returns which bot sent it. */

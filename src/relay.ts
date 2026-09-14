@@ -5,6 +5,7 @@ import { handlesMatch, maskHandle } from "./handles.ts";
 import type { MessageRow, MessageStore } from "./imessage/chatdb.ts";
 import { Outbox } from "./imessage/outbox.ts";
 import type { Sender } from "./imessage/sender.ts";
+import { MessagesWatcher } from "./imessage/watcher.ts";
 import { log } from "./log.ts";
 import { routeMessage, type InboundMessage } from "./router.ts";
 import type { State } from "./state.ts";
@@ -12,6 +13,7 @@ import { dueSchedules, localDay } from "./time.ts";
 
 /** Messages older than this when first seen (e.g. the Mac was asleep) are skipped, not answered late. */
 const MAX_MESSAGE_AGE_MS = 15 * 60_000;
+const WAKE_GAP_MS = 60_000;
 
 export type RelayDeps = {
   config: Config;
@@ -33,6 +35,8 @@ export class Relay {
   #lastRowId: number | undefined;
   #lastDbErrorAt = 0;
   #queues = new Map<string, Promise<void>>();
+  #watcher: MessagesWatcher;
+  #lastTickAt: number;
   #startedAt: Date;
 
   constructor(deps: RelayDeps) {
@@ -41,6 +45,8 @@ export class Relay {
     this.#state = deps.state;
     this.#now = deps.now ?? (() => new Date());
     this.#startedAt = this.#now();
+    this.#lastTickAt = this.#startedAt.getTime();
+    this.#watcher = new MessagesWatcher(deps.config.chatDbPath, () => this.pollMessages(), () => this.#now().getTime());
     this.outbox = new Outbox({ sender: deps.sender, chats: deps.messages, state: deps.state, config: deps.config, now: this.#now });
     this.#bridge = new GrokBotBridge({
       api: deps.grokBot,
@@ -52,19 +58,34 @@ export class Relay {
   }
 
   async start(): Promise<void> {
+    // Capture the cursor before network startup so texts arriving during connection aren't skipped.
+    this.pollMessages();
     await this.#bridge.start().catch((err) => log.error("Couldn't connect to Grok Bot yet (will keep trying)", err));
     log.info(`Relay started: ${this.#config.bots.map((b) => `${b.name} → "${b.grokBot}"`).join(", ")}`);
-    this.pollMessages();
   }
 
   async tick(): Promise<void> {
+    const now = this.#now().getTime();
+    const gap = now - this.#lastTickAt;
+    this.#lastTickAt = now;
+    if (gap > Math.max(WAKE_GAP_MS, this.#config.poll.chatDbMs * 4)) {
+      this.#messages.close(); // Reopen the current database/WAL after a long pause.
+      this.#watcher.rearm();
+      this.#bridge.resumeAfterPause();
+      log.info("Relay resumed after a long pause; refreshing Messages and gateway connections");
+    }
+    this.#watcher.maintain();
     this.pollMessages();
     this.#runSchedules();
-    await Promise.all([this.#bridge.poll(), this.outbox.flushDeferred()]);
+    this.#bridge.poll();
+    // Both components own and deduplicate their in-flight work. Never wait for the network
+    // or Messages.app here; the next database check must run on its own cadence.
+    void this.outbox.flushDeferred();
   }
 
   async run(signal: AbortSignal): Promise<void> {
-    await this.start();
+    const starting = this.start().catch((err) => log.error("Relay startup error", err));
+    this.watchMessages();
     while (!signal.aborted) {
       try {
         await this.tick();
@@ -73,15 +94,30 @@ export class Relay {
       }
       await delay(this.#config.poll.chatDbMs, undefined, { signal }).catch(() => {});
     }
+    this.stopWatching();
+    await starting;
     await this.idle();
     log.info("Relay stopped");
   }
 
-  /** Resolves once queued prompts and outgoing messages have finished. */
+  /**
+   * Picks up texts the moment Messages writes them, instead of on the next poll. The regular
+   * poll stays as a safety net, since file events can be missed or unsupported.
+   */
+  watchMessages(): void {
+    this.#watcher.start();
+  }
+
+  stopWatching(): void {
+    this.#watcher.stop();
+  }
+
+  /** Drains prompts, transcript reads, and outgoing messages, including during shutdown. */
   async idle(): Promise<void> {
     for (;;) {
       const snapshot = [...this.#queues.values()];
       await Promise.all(snapshot);
+      await this.#bridge.idle();
       await this.outbox.idle();
       const current = [...this.#queues.values()];
       if (current.length === snapshot.length && current.every((p, i) => p === snapshot[i])) return;

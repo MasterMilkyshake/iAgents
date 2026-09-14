@@ -160,11 +160,36 @@ describe("Grok Bot 0.47 transcript shape", () => {
     );
   });
 
-  it("relays the bot's reply once its text settles", () => {
+  it("relays the bot's reply immediately: a send-message is never mid-write", () => {
     const entries = extractEntries(payload).map((e) => parseEntry(e)!);
+    assert.equal(entries[1].complete, true);
     const tracker = new TranscriptTracker(4000);
-    assert.equal(tracker.ready(entries, 0, () => false).length, 0, "not yet settled");
-    assert.deepEqual(tracker.ready(entries, 5000, () => false).map((e) => e.text), ["Hello — bridge confirmed."]);
+    assert.deepEqual(tracker.ready(entries, 0, () => false).map((e) => e.text), ["Hello — bridge confirmed."]);
+  });
+
+  it("waits on a streaming agent message, which is the shape that can be mid-write", () => {
+    // Grok Bot's own test for in-progress is `kind === "message" && isStreaming`.
+    const streaming = parseEntry({ kind: "message", id: "m1", fromAgent: { name: "Manager" }, content: "Half a th", isStreaming: true, timestampMs: 1 })!;
+    assert.equal(streaming.role, "bot");
+    assert.equal(streaming.complete, false);
+    assert.equal(streaming.author, "Manager");
+    const done = parseEntry({ kind: "message", id: "m1", fromAgent: { name: "Manager" }, content: "Half a thought, now whole", isStreaming: false, timestampMs: 2 })!;
+    assert.equal(done.complete, true);
+  });
+
+  it("describes a permission ask so a blocked bot isn't silent", () => {
+    const ask = parseEntry({
+      kind: "send-message",
+      id: "p1",
+      message: { type: "local-tool-permission", action: "send-imessage", target: "+15551230000", ask: { status: "pending" } },
+      timestampMs: 3,
+    })!;
+    assert.equal(ask.role, "bot");
+    assert.equal(ask.needsApproval, true);
+    assert.equal(ask.text, "Waiting for your approval to send imessage: +15551230000.");
+    // An ask that has already been answered isn't worth a text.
+    const answered = parseEntry({ kind: "send-message", id: "p2", message: { type: "local-tool-permission", ask: { status: "approved" } }, timestampMs: 4 })!;
+    assert.equal(answered.text, "");
   });
 
   it("ignores a non-text payload such as an image", () => {

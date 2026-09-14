@@ -8,7 +8,7 @@ import { extractEntries, parseEntry } from "./grokbot/transcript.ts";
 import { ChatDb, type MessageStore } from "./imessage/chatdb.ts";
 import { AppleScriptSender, ConsoleSender } from "./imessage/sender.ts";
 import { installService, LOG_PATH, PLIST_PATH, uninstallService } from "./launchd.ts";
-import { errorMessage, log, setLogLevel } from "./log.ts";
+import { errorMessage, log, maintainLog, setLogLevel } from "./log.ts";
 import { Relay } from "./relay.ts";
 import { State } from "./state.ts";
 
@@ -44,9 +44,14 @@ async function run(dryRun: boolean): Promise<void> {
   process.once("SIGINT", () => controller.abort());
   process.once("SIGTERM", () => controller.abort());
   if (dryRun) log.info("Dry run: replies are printed here, not texted");
-  await relay.run(controller.signal);
-  messages.close();
-  state.close();
+  const stopLogMaintenance = dryRun ? () => {} : maintainLog(LOG_PATH);
+  try {
+    await relay.run(controller.signal);
+  } finally {
+    stopLogMaintenance();
+    messages.close();
+    state.close();
+  }
 }
 
 /** A Messages store with no history, for runs that don't touch iMessage. */
@@ -92,7 +97,8 @@ async function simulate(botName: string, text: string): Promise<void> {
 async function listBots(): Promise<void> {
   const bots = await (await createGatewayApi()).listBots();
   if (bots.length === 0) return console.log("No bots in your Grok Bot app yet.");
-  for (const b of bots) console.log(`${b.isGroup ? "group" : "bot  "}  ${b.name}${b.title ? ` (${b.title})` : ""}`);
+  // The id is what belongs in config.jsonc: renaming a bot in the app then changes nothing.
+  for (const b of bots) console.log(`${b.isGroup ? "group" : "bot  "}  ${b.id}  ${b.name}${b.title ? ` (${b.title})` : ""}`);
 }
 
 function shorten(value: unknown): unknown {

@@ -166,6 +166,21 @@ export class FakeGrokBot implements GrokBotApi {
     this.post(botId, { kind: "message", id: `t${++this.#counter}u`, role: "user", content: prompt, isStreaming: false, timestampMs: (this.#clock += 1000) });
   }
 
+  /**
+   * A bot message posted as a "message" entry (the shape that can stream, carrying fromAgent).
+   * Omitting `streaming` leaves completion unstated, so the settling rules decide.
+   */
+  agentMessage(botId: string, id: string, content: string, opts: { streaming?: boolean; author?: string } = {}): void {
+    this.post(botId, {
+      kind: "message",
+      id,
+      fromAgent: { name: opts.author ?? "Bot" },
+      content,
+      ...(opts.streaming === undefined ? {} : { isStreaming: opts.streaming }),
+      timestampMs: (this.#clock += 1000),
+    });
+  }
+
   /** A message from the bot, in Grok Bot's real transcript shape (no role; text under message.content). */
   reply(botId: string, id: string, content: string, extra: Record<string, unknown> = {}): void {
     this.post(botId, { kind: "send-message", id, message: { type: "text", content }, timestampMs: (this.#clock += 1000), ...extra });

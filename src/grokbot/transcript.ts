@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { presentPost } from "./posts.ts";
 
 /**
  * Grok Bot's gateway API is undocumented. As of Grok Bot 0.47 a transcript looks like:
@@ -28,6 +29,8 @@ export type TranscriptEntry = {
   needsApproval: boolean;
   /** Creation time in ms, when the entry has one. */
   at?: number;
+  /** Fixed diagnostic, never entry contents, for unsupported visible shapes. */
+  ignoredReason?: string;
 };
 
 type Obj = Record<string, unknown>;
@@ -69,8 +72,11 @@ export function extractEntries(payload: unknown): unknown[] {
 export function parseEntry(raw: unknown): TranscriptEntry | undefined {
   const e = asObj(raw);
   if (!e) return undefined;
-  const role = classifyRole(e);
-  const text = entryText(e).trim();
+  let role = classifyRole(e);
+  const post = role === "user" ? undefined : presentPost(e);
+  if (post?.text && ["notice", "event", "feedback"].includes(lower(e.kind))) role = "bot";
+  const ask = permissionAsk(e);
+  const text = (post?.text ?? ask ?? entryText(e)).trim();
   const id = str(e.id) || str(e.messageId) || str(e.entryId) || str(e.uuid) || str(e.key) || syntheticId(e, role, text);
   const kind = `${lower(e.type)} ${lower(e.kind)}`;
   const at = timestamp(e.timestampMs ?? e.timestamp_ms ?? e.createdAt ?? e.created_at ?? e.timestamp ?? e.time ?? e.sentAt);
@@ -78,11 +84,34 @@ export function parseEntry(raw: unknown): TranscriptEntry | undefined {
     id,
     role,
     text,
-    complete: completion(e),
-    author: str(asObj(e.author)?.name) || str(asObj(e.sender)?.name) || str(e.agentName) || str(e.authorName),
-    needsApproval: /approv|permission/.test(kind) || e.requiresApproval === true || e.needsApproval === true,
+    complete: completion(e) === false ? false : post?.text ? true : completion(e),
+    author:
+      str(asObj(e.fromAgent)?.name) ||
+      str(asObj(e.author)?.name) ||
+      str(asObj(e.sender)?.name) ||
+      str(e.agentName) ||
+      str(e.authorName),
+    needsApproval: post?.needsApproval === true || ask !== undefined || /approv|permission/.test(kind) || e.requiresApproval === true || e.needsApproval === true,
     ...(at === undefined ? {} : { at }),
+    ...(post?.ignoredReason ? { ignoredReason: post.ignoredReason } : {}),
   };
+}
+
+/**
+ * A bot waiting on approval posts a send-message whose payload is a permission ask rather than
+ * text (`message.type: "local-tool-permission"`). It has no text of its own, so describe it —
+ * otherwise a blocked bot looks like silence.
+ */
+function permissionAsk(e: Obj): string | undefined {
+  const message = asObj(e.message);
+  if (!message || message.type !== "local-tool-permission") return undefined;
+  const ask = asObj(message.ask) ?? {};
+  const status = lower(ask.status) || lower(message.status);
+  if (status && status !== "pending") return undefined; // already answered or expired
+  const action = str(message.action) || str(ask.action);
+  const target = str(message.target) || str(ask.target);
+  const what = [action.replace(/[-_]/g, " "), target].filter(Boolean).join(": ");
+  return `Waiting for your approval${what ? ` to ${what}` : ""}.`;
 }
 
 function timestamp(value: unknown): number | undefined {
@@ -115,7 +144,10 @@ function classifyRole(e: Obj): EntryRole {
     lower(e.sender) ||
     lower(e.author);
   if (USER_ROLES.has(role)) return "user";
+  if (/tool|function|thinking|reasoning|status|progress|system|log|trace|debug|typing/.test(kind)) return "other";
   if (BOT_KINDS.has(lower(e.kind)) || BOT_KINDS.has(lower(e.type))) return "bot";
+  // A "message" entry from a bot carries fromAgent; the same shape with role "user" is yours.
+  if (lower(e.kind) === "message" && asObj(e.fromAgent) !== undefined) return "bot";
   if (NON_MESSAGE_TYPE.test(kind) && !MESSAGE_TYPE.test(kind)) return "other";
   if (BOT_ROLES.has(role)) return "bot";
   // Some transcripts only encode the speaker in the type, e.g. "user_message" / "assistant_message".
@@ -160,6 +192,11 @@ function completion(e: Obj): boolean | null {
   const status = lower(e.status) || lower(e.state);
   if (IN_PROGRESS.has(status)) return false;
   if (e.done === true || e.complete === true || e.isComplete === true || e.final === true || DONE.has(status)) return true;
+  // Grok Bot sets isStreaming explicitly; false means the write finished.
+  if (e.isStreaming === false || e.streaming === false) return true;
+  // Grok Bot streams only "message" entries (its own check is `kind === "message" && isStreaming`).
+  // A send-message is written in one go, so relay it immediately instead of waiting for it to settle.
+  if (BOT_KINDS.has(lower(e.kind)) || BOT_KINDS.has(lower(e.type))) return true;
   return null;
 }
 
@@ -177,7 +214,7 @@ function syntheticId(e: Obj, role: EntryRole, text: string): string {
 export class TranscriptTracker {
   readonly stableMs: number;
   readonly maxWaitMs: number;
-  #pending = new Map<string, { text: string; changedAt: number; firstSeen: number }>();
+  #pending = new Map<string, { text: string; changedAt: number; firstSeen: number; streaming: boolean }>();
 
   constructor(stableMs: number, maxWaitMs = 5 * 60_000) {
     this.stableMs = stableMs;
@@ -209,7 +246,7 @@ export class TranscriptTracker {
 
       if (!done) {
         const changed = !prev || prev.text !== entry.text;
-        this.#pending.set(entry.id, { text: entry.text, changedAt: changed ? now : prev.changedAt, firstSeen });
+        this.#pending.set(entry.id, { text: entry.text, changedAt: changed ? now : prev.changedAt, firstSeen, streaming: entry.complete === false });
         break;
       }
       this.#pending.delete(entry.id);
@@ -220,5 +257,17 @@ export class TranscriptTracker {
 
   hasPending(): boolean {
     return this.#pending.size > 0;
+  }
+
+  resetPending(): void {
+    this.#pending.clear();
+  }
+
+  /** Next settling/timeout deadline; explicit streaming flags still require normal polling. */
+  nextCheckAt(): number | undefined {
+    if (!this.#pending.size) return undefined;
+    return Math.min(...[...this.#pending.values()].map((entry) =>
+      Math.min(entry.firstSeen + this.maxWaitMs, entry.streaming ? Infinity : entry.changedAt + this.stableMs),
+    ));
   }
 }
